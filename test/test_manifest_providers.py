@@ -1,10 +1,14 @@
 # -*- coding: utf-8 -*-
 
+import sys
+
+import rosdistro.manifest_provider.github
 import rosdistro.vcs
+
 from rosdistro.manifest_provider.bitbucket import bitbucket_manifest_provider
 from rosdistro.manifest_provider.cache import CachedManifestProvider, sanitize_xml
 from rosdistro.manifest_provider.git import git_manifest_provider, git_source_manifest_provider
-from rosdistro.manifest_provider.github import github_manifest_provider, github_source_manifest_provider
+#from rosdistro.manifest_provider.github import github_manifest_provider, github_source_manifest_provider
 from rosdistro.release_repository_specification import ReleaseRepositorySpecification
 from rosdistro.source_repository_specification import SourceRepositorySpecification
 
@@ -18,7 +22,7 @@ def test_cached():
         def __init__(self):
             self.release_package_xmls = {}
     dc = FakeDistributionCache()
-    cache = CachedManifestProvider(dc, [github_manifest_provider])
+    cache = CachedManifestProvider(dc, [rosdistro.manifest_provider.github.github_manifest_provider])
     assert '</package>' in cache('kinetic', _genmsg_release_repo(), 'genmsg')
 
 
@@ -33,7 +37,7 @@ def test_git_legacy():
 
 
 def test_github():
-    assert '</package>' in github_manifest_provider('kinetic', _genmsg_release_repo(), 'genmsg')
+    assert '</package>' in rosdistro.manifest_provider.github.github_manifest_provider('kinetic', _genmsg_release_repo(), 'genmsg')
 
 
 def test_git_source():
@@ -46,9 +50,45 @@ def test_git_source():
     assert '' == package_path
     assert '<version>0.5.7</version>' in package_xml
 
+# my_urlopen is used to mock out the 'urlopen' method in the urllib2
+# module
+def my_urlopen(req):
+    import re
+
+    if sys.modules[__name__].mockfp is not None:
+        sys.modules[__name__].mockfp.close()
+        sys.modules[__name__].mockfp = None
+    if isinstance(req, str) or isinstance(req, unicode):
+        haystack = req
+    else:
+        raise TypeError("Unknown type")
+    if re.search('.*package.xml$', haystack) is not None:
+        sys.modules[__name__].mockfp = open('test/github-genmsg-package.xml', 'r')
+    else:
+        sys.modules[__name__].mockfp = open('test/github-tree-data.json', 'r')
+    return sys.modules[__name__].mockfp
+
+
+def mock_urlopen():
+    import urllib2
+    sys.modules[__name__].old_urlopen = urllib2.__dict__['urlopen']
+    sys.modules[__name__].mockfp = None
+    urllib2.__dict__['urlopen'] = my_urlopen
+    reload(rosdistro.manifest_provider.github)
+
+
+def unmock_urlopen():
+    if sys.modules[__name__].mockfp is not None:
+        sys.modules[__name__].mockfp.close()
+    import urllib2
+    urllib2.__dict__['urlopen'] = sys.modules[__name__].old_urlopen
+    reload(rosdistro.manifest_provider.github)
+
 
 def test_github_source():
-    repo_cache = github_source_manifest_provider(_genmsg_source_repo())
+    mock_urlopen()
+    repo_cache = rosdistro.manifest_provider.github.github_source_manifest_provider(_genmsg_source_repo())
+    unmock_urlopen()
 
     # This hash corresponds to the 0.5.7 tag.
     assert repo_cache['_ref'] == '81b66fe5eb00043c43894ddeee07e738d9b9712f'
@@ -60,13 +100,6 @@ def test_github_source():
 
 def test_git_source_multi():
     repo_cache = git_source_manifest_provider(_ros_source_repo())
-    assert repo_cache['_ref']
-    package_path, package_xml = repo_cache['roslib']
-    assert package_path == 'core/roslib'
-
-
-def test_github_source_multi():
-    repo_cache = github_source_manifest_provider(_ros_source_repo())
     assert repo_cache['_ref']
     package_path, package_xml = repo_cache['roslib']
     assert package_path == 'core/roslib'
